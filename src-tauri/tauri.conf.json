@@ -1,0 +1,12 @@
+{
+	"package": {
+		"productName": "Slip in Bloom",
+		"version": "0.1.0"
+	},
+	"tauri": {
+		"bundle": {
+			"active": true,
+			"identifier": "com.slipinbloom.app"
+		}
+	}
+}
