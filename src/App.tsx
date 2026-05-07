@@ -4,6 +4,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { BillingScreen } from './components/BillingScreen';
+import { SplashScreen } from './components/SplashScreen';
 import { SyncService } from './services/sync';
 import { BrowserPrinter, MockPrinter } from './services/printer';
 import type { Product, CartItem, Order, OrderWithItems, SyncResult } from './types';
@@ -21,6 +22,7 @@ const SHOP_NAME = 'Slip in Bloom';
 export const App: React.FC = () => {
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [showSplash, setShowSplash] = useState(true);
   const [syncStatus, setSyncStatus] = useState<{ online: boolean; syncing: boolean; lastSync?: string }>({
     online: navigator.onLine,
     syncing: false,
@@ -230,84 +232,98 @@ export const App: React.FC = () => {
   );
 
   const handleAddProduct = useCallback(
-    (data: { name: string; price: number; category: string; sku: string }) => {
+    async (data: { name: string; price: number; category: string; sku: string }) => {
       const normalizedSku = data.sku.trim();
       if (!/^\d{3}$/.test(normalizedSku)) {
         throw new Error('Item code must be exactly 3 digits (example: 000, 102)');
       }
 
-      setProducts(prev => {
-        const hasDuplicateCode = prev.some(p => p.sku === normalizedSku);
-        if (hasDuplicateCode) {
-          throw new Error(`Item code ${normalizedSku} already exists`);
-        }
-
-        const now = getCurrentTimestamp();
-        const newProduct: Product = {
-          id: generateId() as any,
+      try {
+        // Create product in backend
+        const newProduct: Product = await invoke('create_product', {
           name: data.name.trim(),
+          description: null,
           price: data.price,
           category: data.category.trim(),
           sku: normalizedSku,
-          is_available: true,
-          created_at: now,
-          updated_at: now,
-        };
+        });
 
-        return [...prev, newProduct];
-      });
+        setProducts(prev => {
+          const hasDuplicateCode = prev.some(p => p.sku === normalizedSku);
+          if (hasDuplicateCode) {
+            throw new Error(`Item code ${normalizedSku} already exists`);
+          }
+          return [...prev, newProduct];
+        });
+      } catch (error: any) {
+        console.error('Failed to create product:', error);
+        throw new Error(error.message || 'Failed to save product to database');
+      }
     },
     []
   );
 
   const handleUpdateProduct = useCallback(
-    (data: { id: string; name: string; price: number; category: string; sku: string; is_available: boolean }) => {
+    async (data: { id: string; name: string; price: number; category: string; sku: string; is_available: boolean }) => {
       const normalizedSku = data.sku.trim();
       if (!/^\d{3}$/.test(normalizedSku)) {
         throw new Error('Item code must be exactly 3 digits (example: 000, 102)');
       }
 
-      setProducts(prev => {
-        const hasDuplicateCode = prev.some(p => p.id !== data.id && p.sku === normalizedSku);
-        if (hasDuplicateCode) {
-          throw new Error(`Item code ${normalizedSku} already exists`);
-        }
+      try {
+        // Update product in backend
+        const updatedProduct: Product = await invoke('update_product', {
+          id: data.id,
+          name: data.name.trim(),
+          price: data.price,
+          isAvailable: data.is_available,
+        });
 
-        const exists = prev.some(p => p.id === data.id);
-        if (!exists) {
-          throw new Error('Item not found');
-        }
-
-        return prev.map(p =>
-          p.id === data.id
-            ? {
-                ...p,
-                name: data.name.trim(),
-                price: data.price,
-                category: data.category.trim(),
-                sku: normalizedSku,
-                is_available: data.is_available,
-                updated_at: getCurrentTimestamp(),
-              }
-            : p
-        );
-      });
+        setProducts(prev => {
+          const hasDuplicateCode = prev.some(p => p.id !== data.id && p.sku === normalizedSku);
+          if (hasDuplicateCode) {
+            throw new Error(`Item code ${normalizedSku} already exists`);
+          }
+          return prev.map(p => (p.id === data.id ? updatedProduct : p));
+        });
+      } catch (error: any) {
+        console.error('Failed to update product:', error);
+        throw new Error(error.message || 'Failed to update product in database');
+      }
     },
     []
   );
 
-  const handleDeleteProduct = useCallback((productId: string) => {
-    setProducts(prev => {
-      const exists = prev.some(p => p.id === productId);
-      if (!exists) {
-        throw new Error('Item not found');
-      }
-      return prev.filter(p => p.id !== productId);
-    });
+  const handleDeleteProduct = useCallback(async (productId: string) => {
+    try {
+      await invoke('delete_product', { id: productId });
+      setProducts(prev => {
+        const exists = prev.some(p => p.id === productId);
+        if (!exists) {
+          throw new Error('Item not found');
+        }
+        return prev.filter(p => p.id !== productId);
+      });
+    } catch (error: any) {
+      console.error('Failed to delete product:', error);
+      throw new Error(error.message || 'Failed to delete product from database');
+    }
   }, []);
 
+  if (showSplash) {
+    return <SplashScreen onComplete={() => setShowSplash(false)} />;
+  }
+
   if (isLoading) {
-    return <div style={{ padding: '20px', textAlign: 'center' }}>Loading...</div>;
+    return <div style={{ 
+      height: '100vh', 
+      display: 'flex', 
+      justifyContent: 'center', 
+      alignItems: 'center',
+      background: '#fdfcfb',
+      color: '#5d4037',
+      fontFamily: 'serif'
+    }}>Loading System...</div>;
   }
 
   return (

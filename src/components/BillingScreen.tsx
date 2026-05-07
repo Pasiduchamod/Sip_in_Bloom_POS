@@ -10,7 +10,7 @@ import { invoke } from '@tauri-apps/api/core';
 interface BillingScreenProps {
   products: Product[];
   onCheckout: (order: { items: CartItem[]; total: number; payment_method: 'cash' | 'card' }) => Promise<void>;
-  onAddProduct?: (product: { name: string; price: number; category: string; sku: string }) => void;
+  onAddProduct?: (product: { name: string; price: number; category: string; sku: string }) => Promise<void>;
   onUpdateProduct?: (product: {
     id: string;
     name: string;
@@ -18,8 +18,8 @@ interface BillingScreenProps {
     category: string;
     sku: string;
     is_available: boolean;
-  }) => void;
-  onDeleteProduct?: (productId: string) => void;
+  }) => Promise<void>;
+  onDeleteProduct?: (productId: string) => Promise<void>;
   onRefresh?: () => void;
 }
 
@@ -335,37 +335,41 @@ Report generated successfully from Database.
       return;
     }
 
-    try {
-      if (managerMode === 'add') {
-        if (!onAddProduct) {
-          setManagerError('Add action is not available');
-          return;
+    const save = async () => {
+      try {
+        if (managerMode === 'add') {
+          if (!onAddProduct) {
+            setManagerError('Add action is not available');
+            return;
+          }
+          await onAddProduct({ name, category, price: priceInCents, sku: code });
+          resetManagerForm();
+        } else {
+          if (!onUpdateProduct) {
+            setManagerError('Edit action is not available');
+            return;
+          }
+          if (!editProductId) {
+            setManagerError('Select an item to edit');
+            return;
+          }
+          await onUpdateProduct({
+            id: editProductId,
+            name,
+            category,
+            price: priceInCents,
+            sku: code,
+            is_available: formAvailable,
+          });
         }
-        onAddProduct({ name, category, price: priceInCents, sku: code });
-        resetManagerForm();
-      } else {
-        if (!onUpdateProduct) {
-          setManagerError('Edit action is not available');
-          return;
-        }
-        if (!editProductId) {
-          setManagerError('Select an item to edit');
-          return;
-        }
-        onUpdateProduct({
-          id: editProductId,
-          name,
-          category,
-          price: priceInCents,
-          sku: code,
-          is_available: formAvailable,
-        });
+        setManagerError(null);
+        setIsManagerOpen(false);
+      } catch (error) {
+        setManagerError(error instanceof Error ? error.message : 'Failed to save item');
       }
-      setManagerError(null);
-      setIsManagerOpen(false);
-    } catch (error) {
-      setManagerError(error instanceof Error ? error.message : 'Failed to save item');
-    }
+    };
+
+    save();
   }, [
     formCode,
     formName,
@@ -778,13 +782,16 @@ Report generated successfully from Database.
                     if (!window.confirm('Delete this item? This cannot be undone.')) {
                       return;
                     }
-                    try {
-                      onDeleteProduct(editProductId);
-                      setManagerError(null);
-                      setIsManagerOpen(false);
-                    } catch (error) {
-                      setManagerError(error instanceof Error ? error.message : 'Failed to delete item');
-                    }
+                    const performDelete = async () => {
+                      try {
+                        await onDeleteProduct(editProductId);
+                        setManagerError(null);
+                        setIsManagerOpen(false);
+                      } catch (error) {
+                        setManagerError(error instanceof Error ? error.message : 'Failed to delete item');
+                      }
+                    };
+                    performDelete();
                   }}
                   style={styles.modalDeleteBtn}
                 >
