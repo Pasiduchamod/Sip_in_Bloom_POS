@@ -1,12 +1,29 @@
 {
-	"package": {
-		"productName": "Slip in Bloom",
-		"version": "0.1.0"
-	},
-	"tauri": {
-		"bundle": {
-			"active": true,
-			"identifier": "com.slipinbloom.app"
-		}
-	}
+  "productName": "Slip in Bloom",
+  "version": "0.1.0",
+  "identifier": "com.slipinbloom.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:5173",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "security": {
+      "csp": null
+    },
+    "windows": [
+      {
+        "fullscreen": false,
+        "height": 900,
+        "resizable": true,
+        "title": "Slip in Bloom POS",
+        "width": 1200
+      }
+    ]
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all"
+  }
 }

@@ -3,8 +3,9 @@
 
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import type { Product, Cart, CartItem, Order } from '../types';
-import { formatPrice, parsePrice } from '../services/db';
+import { formatPrice, parsePrice, getTodayDate } from '../services/db';
 import { ThermalPrinter } from '../services/printer';
+import { invoke } from '@tauri-apps/api/core';
 
 interface BillingScreenProps {
   products: Product[];
@@ -184,14 +185,9 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       setBillPaymentMethod(paymentMethod);
       setIsBillOpen(true);
       
-      // Track daily sales
-      setDailySales(prev => [...prev, {
-        items: cart.items,
-        total: cart.total,
-        payment_method: paymentMethod,
-        timestamp: new Date(),
-      }]);
+      // Update quick total display right away
       setSummaryTotal(prev => prev + cart.total);
+      setDailySales(prev => [...prev, { total: cart.total }]);
     } catch (error) {
       console.error('Checkout error:', error);
     } finally {
@@ -260,7 +256,7 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
     }
   }, [billItems, billTotal, billPaymentMethod, clearCart]);
 
-  const handleSummaryConfirm = useCallback(() => {
+  const handleSummaryConfirm = useCallback(async () => {
     if (summaryConfirmInput.trim().toLowerCase() !== 'getsummary') {
       setAlertMessage('Incorrect confirmation. Type "GetSummery" to confirm.');
       setAlertType('error');
@@ -268,38 +264,35 @@ export const BillingScreen: React.FC<BillingScreenProps> = ({
       return;
     }
 
-    // Calculate summary report
-    const cashTotal = dailySales
-      .filter(sale => sale.payment_method === 'cash')
-      .reduce((sum, sale) => sum + sale.total, 0);
-    const cardTotal = dailySales
-      .filter(sale => sale.payment_method === 'card')
-      .reduce((sum, sale) => sum + sale.total, 0);
-    const totalItems = dailySales.reduce((sum, sale) => sum + sale.items.reduce((s: number, item: any) => s + item.quantity, 0), 0);
-
-    const summaryMessage = `
+    try {
+      const summary: any = await invoke('calculate_daily_summary', { date: getTodayDate() });
+      
+      const summaryMessage = `
 DAILY SALES SUMMARY
 ━━━━━━━━━━━━━━━━━━━━━━
-Total Sales: ${formatPrice(summaryTotal)}
-Total Transactions: ${dailySales.length}
-Total Items Sold: ${totalItems}
+Total Sales: ${formatPrice(summary.total_sales || 0)}
+Total Transactions: ${summary.total_orders || 0}
+Total Items Sold: ${summary.total_items_sold || 0}
 
-Cash: ${formatPrice(cashTotal)}
-Card: ${formatPrice(cardTotal)}
+Cash: ${formatPrice(summary.payment_cash || 0)}
+Card: ${formatPrice(summary.payment_card || 0)}
 
-Sales data has been reset to zero.
+Report generated successfully from Database.
     `.trim();
 
-    setAlertMessage(summaryMessage);
-    setAlertType('info');
-    setIsAlertOpen(true);
+      setAlertMessage(summaryMessage);
+      setAlertType('info');
+      setIsAlertOpen(true);
 
-    // Reset daily sales
-    setDailySales([]);
-    setSummaryTotal(0);
-    setIsSummaryConfirmOpen(false);
-    setSummaryConfirmInput('');
-  }, [summaryConfirmInput, dailySales, summaryTotal]);
+      setIsSummaryConfirmOpen(false);
+      setSummaryConfirmInput('');
+    } catch (e: any) {
+      console.error('Failed to get daily summary', e);
+      setAlertMessage('Error getting summary from DB.');
+      setAlertType('error');
+      setIsAlertOpen(true);
+    }
+  }, [summaryConfirmInput]);
 
   const openAddManager = useCallback(() => {
     setManagerMode('add');
@@ -448,6 +441,14 @@ Sales data has been reset to zero.
     gridTemplateColumns: isCompactLayout ? '1fr auto auto 32px' : styles.cartItem.gridTemplateColumns,
   };
 
+  // Fetch the summary totals right on mount so it's correct across reloads
+  useEffect(() => {
+    invoke('calculate_daily_summary', { date: getTodayDate() }).then((res: any) => {
+      setSummaryTotal(res.total_sales || 0);
+      setDailySales(new Array(res.total_orders || 0).fill({}));
+    }).catch(console.error);
+  }, []);
+
   return (
     <div style={containerStyle}>
       {/* Left: Product Selection */}
@@ -526,6 +527,11 @@ Sales data has been reset to zero.
 
       {/* Right: Cart */}
       <div style={rightPanelStyle}>
+        {/* Logo */}
+        <div style={styles.logoContainer}>
+          <img src="/logo.png" alt="Slip in Bloom" style={styles.logo} />
+        </div>
+
         <h2 style={styles.cartTitle}>Cart</h2>
 
         {/* Cart Items */}
@@ -840,6 +846,7 @@ Sales data has been reset to zero.
         <div style={styles.modalOverlay}>
           <div style={styles.billModalWindow}>
             <div style={styles.billHeader}>
+              <img src="/logo.png" alt="Slip in Bloom" style={styles.billLogo} />
               <h3 style={styles.billTitle}>Order Confirmation</h3>
             </div>
 
@@ -1375,7 +1382,10 @@ const styles = {
     display: 'flex',
     justifyContent: 'flex-end',
     gap: '12px',
-    padding: '12px 0 0 0',
+    padding: '16px',
+    borderTop: '1px solid #eee',
+    background: '#fafafa',
+    flexShrink: 0,
   } as React.CSSProperties,
 
   modalDeleteBtn: {
@@ -1386,6 +1396,7 @@ const styles = {
     color: '#c62828',
     fontWeight: '700',
     cursor: 'pointer',
+    minWidth: '80px',
   } as React.CSSProperties,
 
   modalSaveBtn: {
@@ -1396,6 +1407,7 @@ const styles = {
     color: '#fff',
     fontWeight: '700',
     cursor: 'pointer',
+    minWidth: '80px',
   } as React.CSSProperties,
 
   summarySection: {
@@ -1460,7 +1472,7 @@ const styles = {
   billModalWindow: {
     background: '#fff',
     borderRadius: '8px',
-    width: '550px',
+    width: '620px',
     maxHeight: '80vh',
     boxShadow: '0 10px 40px rgba(0,0,0,0.2)',
     display: 'flex',
@@ -1470,21 +1482,50 @@ const styles = {
 
   billHeader: {
     padding: '16px',
+    paddingBottom: '12px',
     borderBottom: '1px solid #eee',
     background: '#fafafa',
+    textAlign: 'center' as const,
+    display: 'flex',
+    flexDirection: 'column' as const,
+    alignItems: 'center' as const,
+    flexShrink: 0,
   } as React.CSSProperties,
 
   billTitle: {
-    margin: 0,
-    fontSize: '16px',
+    margin: '8px 0 0 0',
+    fontSize: '18px',
     fontWeight: 'bold' as const,
     color: '#333',
+    textAlign: 'center' as const,
+  } as React.CSSProperties,
+
+  billLogo: {
+    maxHeight: '45px',
+    maxWidth: '100%',
+    objectFit: 'contain' as const,
+    marginBottom: '6px',
+    display: 'block' as const,
+  } as React.CSSProperties,
+
+  logoContainer: {
+    textAlign: 'center' as const,
+    marginBottom: '12px',
+    paddingBottom: '10px',
+    borderBottom: '1px solid #eee',
+  } as React.CSSProperties,
+
+  logo: {
+    maxHeight: '70px',
+    maxWidth: '100%',
+    objectFit: 'contain' as const,
   } as React.CSSProperties,
 
   billContent: {
     flex: 1,
     overflow: 'auto' as const,
     padding: '16px',
+    paddingBottom: '20px',
   } as React.CSSProperties,
 
   billInfoSection: {
@@ -1516,21 +1557,21 @@ const styles = {
 
   billItemsHeader: {
     display: 'grid',
-    gridTemplateColumns: '2fr 50px 80px 100px',
-    gap: '8px',
-    padding: '8px 0',
+    gridTemplateColumns: '2fr 60px 100px 100px',
+    gap: '10px',
+    padding: '10px 0',
     borderBottom: '2px solid #333',
     fontWeight: 'bold' as const,
-    fontSize: '12px',
+    fontSize: '13px',
     color: '#333',
-    marginBottom: '8px',
+    marginBottom: '10px',
   } as React.CSSProperties,
 
   billItem: {
     display: 'grid',
-    gridTemplateColumns: '2fr 50px 80px 100px',
-    gap: '8px',
-    padding: '8px 0',
+    gridTemplateColumns: '2fr 60px 100px 100px',
+    gap: '10px',
+    padding: '10px 0',
     borderBottom: '1px solid #f0f0f0',
     fontSize: '13px',
     alignItems: 'center' as const,
@@ -1603,22 +1644,24 @@ const styles = {
   } as React.CSSProperties,
 
   modalPrintBtn: {
-    padding: '10px 16px',
+    padding: '10px 20px',
     border: '1px solid #FF9800',
     borderRadius: '4px',
     background: '#FF9800',
     color: '#fff',
     fontWeight: '700',
     cursor: 'pointer',
+    minWidth: '120px',
   } as React.CSSProperties,
 
   modalCancelBtn: {
-    padding: '10px 16px',
+    padding: '10px 20px',
     border: '1px solid #999',
     borderRadius: '4px',
     background: '#f5f5f5',
     color: '#333',
     fontWeight: '700',
     cursor: 'pointer',
+    minWidth: '90px',
   } as React.CSSProperties,
 };

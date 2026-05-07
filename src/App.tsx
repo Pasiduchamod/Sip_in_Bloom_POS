@@ -2,6 +2,7 @@
 // Main application component
 
 import React, { useEffect, useState, useCallback } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { BillingScreen } from './components/BillingScreen';
 import { SyncService } from './services/sync';
 import { BrowserPrinter, MockPrinter } from './services/printer';
@@ -25,7 +26,7 @@ export const App: React.FC = () => {
     syncing: false,
   });
   const [syncService, setSyncService] = useState<SyncService | null>(null);
-  const [printer] = useState(() => new MockPrinter({ device_name: 'mock', width_chars: 32 }));
+  const [printer] = useState(() => new MockPrinter({ device_name: 'mock', width_chars: 32, logo: '/logo.png' }));
 
   // Initialize app
   useEffect(() => {
@@ -33,8 +34,32 @@ export const App: React.FC = () => {
       try {
         // Load products from local database
         try {
-          // TODO: Replace with actual Tauri invoke
-          // const result = await invoke('get_all_products');
+          let result: Product[] = await invoke('get_all_products');
+          
+          if (!result || result.length === 0) {
+            const mockProducts = [
+              { name: 'Virgin Mojito', price: 500, category: 'Cocktails', sku: '000' },
+              { name: 'Shirley Temple', price: 400, category: 'Cocktails', sku: '102' },
+              { name: 'Virgin Piña Colada', price: 550, category: 'Cocktails', sku: '215' },
+              { name: 'Lemonade', price: 300, category: 'Beverages', sku: '304' },
+            ];
+            
+            for (const p of mockProducts) {
+              await invoke('create_product', {
+                name: p.name,
+                description: null,
+                price: p.price,
+                category: p.category,
+                sku: p.sku
+              });
+            }
+            result = await invoke('get_all_products');
+          }
+          
+          setProducts(result);
+        } catch (error) {
+          console.error('Failed to load products from DB:', error);
+          // Fallback if Tauri is not available
           const mockProducts: Product[] = [
             {
               id: generateId() as any,
@@ -78,8 +103,6 @@ export const App: React.FC = () => {
             },
           ];
           setProducts(mockProducts);
-        } catch (error) {
-          console.error('Failed to load products:', error);
         }
 
         // Initialize Supabase sync if configured
@@ -130,8 +153,29 @@ export const App: React.FC = () => {
       try {
         setSyncStatus(prev => ({ ...prev, syncing: true }));
 
-        // Create order
-        const order: Order = {
+        // Create order via Tauri if available
+        let backendOrder: Order | null = null;
+        try {
+          backendOrder = await invoke('create_order', {
+            totalAmount: data.total,
+            paymentMethod: data.payment_method,
+          });
+
+          // Create order items
+          for (const cartItem of data.items) {
+            await invoke('add_order_item', {
+              orderId: backendOrder!.id,
+              productId: cartItem.product_id,
+              quantity: cartItem.quantity,
+              unitPrice: cartItem.price,
+              totalPrice: cartItem.price * cartItem.quantity,
+            });
+          }
+        } catch (dbError) {
+          console.error("Database unavailable, proceeding offline:", dbError);
+        }
+
+        const fallbackOrder: Order = {
           id: generateId() as any,
           order_number: Math.floor(Math.random() * 10000),
           total_amount: data.total,
@@ -142,23 +186,7 @@ export const App: React.FC = () => {
           sync_status: 'pending',
         };
 
-        // TODO: Replace with actual Tauri invoke
-        // const result = await invoke('create_order', {
-        //   total_amount: order.total_amount,
-        //   payment_method: order.payment_method,
-        // });
-
-        // Create order items
-        for (const cartItem of data.items) {
-          // TODO: Add order items via Tauri
-          // await invoke('add_order_item', {
-          //   order_id: order.id,
-          //   product_id: cartItem.product_id,
-          //   quantity: cartItem.quantity,
-          //   unit_price: cartItem.price,
-          //   total_price: cartItem.price * cartItem.quantity,
-          // });
-        }
+        const finalOrder = backendOrder || fallbackOrder;
 
         // Prepare for printing
         const itemsWithProducts = data.items
@@ -167,7 +195,7 @@ export const App: React.FC = () => {
             if (!product) return null;
             return {
               id: generateId() as any,
-              order_id: order.id,
+              order_id: finalOrder.id,
               product_id: cartItem.product_id,
               quantity: cartItem.quantity,
               unit_price: cartItem.price,
@@ -179,7 +207,7 @@ export const App: React.FC = () => {
           .filter(Boolean) as any[];
 
         // Print receipt
-        const printResult = await printer.printReceipt(order, itemsWithProducts, SHOP_NAME);
+        const printResult = await printer.printReceipt(finalOrder, itemsWithProducts, SHOP_NAME);
         if (!printResult.success) {
           console.warn('Printer warning:', printResult.error);
           // Don't fail checkout if printer fails

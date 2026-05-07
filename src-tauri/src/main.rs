@@ -26,7 +26,7 @@ fn main() {
 
     tauri::Builder::default()
         .manage(db_state)
-        .setup(|app| {
+        .setup(move |app| {
             // Log app info
             println!("App started with data directory: {:?}", app_dir);
             Ok(())
